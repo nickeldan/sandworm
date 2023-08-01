@@ -1,5 +1,6 @@
 import collections.abc
 import functools
+import multiprocessing
 import os
 import pathlib
 import time
@@ -23,6 +24,7 @@ class Target:
         self._origin = env.file
         self._dependencies = list(dependencies)
         self._builder = builder
+        self._build_event = multiprocessing.Event()
 
     @typing.final
     def __eq__(self, other: typing.Any) -> bool:
@@ -59,6 +61,12 @@ class Target:
     @typing.final
     def builder(self: T) -> Builder[T]:
         return self._builder
+
+    def built(self) -> bool:
+        return self._build_event.wait()
+
+    def set_built(self) -> None:
+        self._build_event.set()
 
     @functools.cached_property
     def exists(self) -> bool:

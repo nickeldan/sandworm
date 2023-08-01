@@ -10,27 +10,26 @@ class VisitState(enum.Enum):
     IN_STACK = enum.auto()
 
 
-def dfs(
-    stack: list[target.Target], visited: collections.abc.Mapping[target.Target, VisitState]
-) -> list[target.Target] | None:
-    top = stack[-1]
-    visited[top] = VisitState.IN_STACK
+class Graph:
+    def ___init__(self, root_node: target.Target) -> None:
+        self.visited: collections.abc.Mapping[target.Target, VisitState] = collections.defaultdict(
+            lambda: VisitState.NOT_VISITED
+        )
+        self.visited[root_node] = VisitState.IN_STACK
+        self.stack: list[target.Target] = [root_node]
 
-    for dep in top.dependencies:
-        if (state := visited[dep]) == VisitState.IN_STACK:
-            return stack[stack.index(dep) :]
-        elif state == VisitState.NOT_VISITED:
-            stack.append(dep)
-            if (cycle := dfs(stack, visited)) is not None:
-                return cycle
-            stack.pop(-1)
+    def find_cycle(self) -> list[target.Target] | None:
+        top = self.stack[-1]
+        self.visited[top] = VisitState.IN_STACK
 
-    visited[top] = VisitState.VISITED
-    return None
+        for dep in top.dependencies:
+            if (state := self.visited[dep]) == VisitState.IN_STACK:
+                return self.stack[self.stack.index(dep) :]
+            elif state == VisitState.NOT_VISITED:
+                self.stack.append(dep)
+                if (cycle := self.find_cycle()) is not None:
+                    return cycle
+                self.stack.pop(-1)
 
-
-def detect_cycle(root_node: target.Target) -> list[target.Target] | None:
-    visited = collections.defaultdict(lambda: VisitState.NOT_VISITED)
-    visited[root_node] = VisitState.IN_STACK
-
-    return dfs([root_node], visited)
+        self.visited[top] = VisitState.VISITED
+        return None
