@@ -1,15 +1,18 @@
+from __future__ import annotations
 import collections.abc
 import functools
+import importlib
 import multiprocessing
 import os
 import pathlib
-import time
 import typing
 
 from . import errors
 
 T = typing.TypeVar("T", bound="Target")
 Builder = typing.Callable[["Environment", T], bool]
+
+_sentinel = object()
 
 
 class Target:
@@ -135,22 +138,45 @@ class Environment:
             raise errors.RepeatedTargetError(target.name)
         self._targets[target.name] = target
 
-    def __getitem__(self, key: str) -> typing.Any:
-        sentinel = object()
-
-        if (value := self._map.get(key, sentinel)) is not sentinel:
+    def get(self, key: str, default: typing.Any = None) -> typing.Any:
+        if (value := self._map.get(key, _sentinel)) is not _sentinel:
             return value
 
         if self._prev is not None:
-            try:
-                return self._prev[key]
-            except KeyError:
-                raise KeyError(key) from None
+            return self._prev.get(key, default)
 
-        if (value := os.environ.get(key, sentinel)) is not sentinel:
+        if (value := os.environ.get(key, _sentinel)) is not _sentinel:
             return value
 
-        raise KeyError(key)
+        return default
+
+    def __contains__(self, key: str) -> bool:
+        return self.get(key, _sentinel) is not _sentinel
+
+    def __getitem__(self, key: str) -> typing.Any:
+        if (value := self.get(key, _sentinel)) is _sentinel:
+            raise KeyError(key)
+        return value
 
     def __setitem__(self, key: str, value: typing.Any) -> None:
         self._map[key] = value
+
+    def load_defaults(self, values: dict[str, typing.Any]) -> None:
+        for key, value in values.items():
+            if key not in self:
+                self[key] = value
+
+    def load_subfile(self, directory: str | pathlib.Path) -> Environment:
+        if isinstance(directory, str):
+            directory = pathlib.Path(directory)
+
+        module = importlib.import_module(str(directory / "Wormfile"))
+        env = Environment(directory / "Wormfile.py", self)
+
+        pwd = os.getcwd()
+        os.chdir(directory)
+        try:
+            module.load_targets(env)
+        finally:
+            os.chdir(pwd)
+        return env

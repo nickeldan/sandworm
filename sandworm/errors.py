@@ -2,5 +2,5 @@ class SandwormError(Exception):
     pass
 
 
-class RepeatTargetError(SandwormError):
+class RepeatedTargetError(SandwormError):
     pass
