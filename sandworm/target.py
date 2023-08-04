@@ -10,21 +10,21 @@ import typing
 from . import errors
 
 T = typing.TypeVar("T", bound="Target")
-Builder = typing.Callable[["Environment", T], bool]
+Builder = typing.Callable[[T], bool]
 
 _sentinel = object()
 
 
 class Target:
+    env: Environment
+
     def __init__(
         self: T,
         name: str,
-        env: Environment,
         dependencies: collections.abc.Iterable[Target],
         builder: Builder[T],
     ) -> None:
         self._name = name
-        self._origin = env.file
         self._dependencies = list(dependencies)
         self._builder = builder
         self._build_event = multiprocessing.Event()
@@ -47,29 +47,26 @@ class Target:
 
     @property
     @typing.final
-    def basedir(self) -> pathlib.Path:
-        return self._origin.parent
-
-    @property
-    @typing.final
-    def origin(self) -> pathlib.Path:
-        return self._origin
-
-    @property
-    @typing.final
     def dependencies(self) -> list[Target]:
         return self._dependencies
 
-    @property
     @typing.final
-    def builder(self: T) -> Builder[T]:
-        return self._builder
+    def wait(self, timeout: float) -> bool:
+        return self._build_event.wait(timeout=timeout)
 
-    def built(self) -> bool:
-        return self._build_event.wait()
-
-    def set_built(self) -> None:
-        self._build_event.set()
+    @typing.final
+    def build(self: T) -> bool:
+        different = (pwd := pathlib.Path.cwd()) != self.env.basedir
+        if different:
+            os.chdir(self.env.basedir)
+        try:
+            ret = self._builder(self)
+        finally:
+            if different:
+                os.chdir(pwd)
+        if ret:
+            self._build_event.set()
+        return ret
 
     @functools.cached_property
     def exists(self) -> bool:
@@ -103,7 +100,7 @@ class Target:
 class FileTarget(Target):
     def __init__(self, *args: typing.Any) -> None:
         super().__init__(*args)
-        self._fullpath = (self.basedir / self.name).resolve()
+        self._fullpath = (self.env.basedir / self.name).resolve()
 
     def fullname(self) -> str:
         return str(self._fullpath)
@@ -123,19 +120,21 @@ class FileTarget(Target):
 
 @typing.final
 class Environment:
-    def __init__(self, file: pathlib.Path, prev: Environment | None = None) -> None:
-        self._file = file.resolve()
+    def __init__(self, file: pathlib.Path | str, prev: Environment | None = None) -> None:
+        if isinstance(file, str):
+            file = pathlib.Path(file)
+        if not file.is_dir():
+            file = file.parent
+
+        self.basedir = file.resolve()
         self._prev = prev
         self._map: dict[str, typing.Any] = {}
         self._targets: dict[str, Target] = {}
 
-    @property
-    def file(self) -> pathlib.Path:
-        return self._file
-
     def add_target(self, target: Target) -> None:
         if target.name in self._targets:
             raise errors.RepeatedTargetError(target.name)
+        target.env = self
         self._targets[target.name] = target
 
     def get(self, key: str, default: typing.Any = None) -> typing.Any:
@@ -171,7 +170,7 @@ class Environment:
             directory = pathlib.Path(directory)
 
         module = importlib.import_module(str(directory / "Wormfile"))
-        env = Environment(directory / "Wormfile.py", self)
+        env = Environment(directory, prev=self)
 
         pwd = os.getcwd()
         os.chdir(directory)

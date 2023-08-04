@@ -18,10 +18,10 @@ def init_logging(formatter: logging.Formatter | None = None) -> None:
 
 def _display_cycle(cycle: list[target.Target]) -> None:
     logger.error("Dependency cycle detected:")
-    base = cycle[0].basedir
+    base = cycle[0].env.basedir
     for t in cycle:
-        logger.error(f"\t{t.fullname()} from {t.origin.relative_to(base)}")
-    logger.error(f"\t{cycle[0].fullname()} from {cycle[0].origin.relative_to(base)}")
+        logger.error(f"\t{t.fullname()} from {t.env.basedir.relative_to(base)}")
+    logger.error(f"\t{cycle[0].fullname()} from .")
 
 
 def root_build(env: target.Environment, main: target.Target) -> bool:
@@ -52,14 +52,13 @@ def make_clean(env: target.Environment) -> bool:
 
 def _build_sequence(env: target.Environment, sequence: list[target.Target]) -> bool:
     for targ in sequence:
-        if targ.built():
+        if targ.wait(0.0):
             continue
 
         logger.debug(f"Building {type(targ).__name__}: {targ.fullname()}")
-        if not targ.builder(env, targ):
+        if not targ.build():
             logger.error(f"Build failed for {type(targ).__name__}: {targ.fullname()}")
             return False
-        targ.set_built()
 
     return True
 
