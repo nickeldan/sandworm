@@ -16,8 +16,6 @@ _sentinel = object()
 
 
 class Target:
-    env: Environment
-
     def __init__(
         self: T,
         name: str,
@@ -28,6 +26,7 @@ class Target:
         self._dependencies = list(dependencies)
         self._builder = builder
         self._build_event = multiprocessing.Event()
+        self._env: Environment | None = None
 
     @typing.final
     def __eq__(self, other: typing.Any) -> bool:
@@ -49,6 +48,12 @@ class Target:
     @typing.final
     def dependencies(self) -> list[Target]:
         return self._dependencies
+
+    @property
+    def env(self) -> Environment:
+        if self._env is None:
+            raise errors.NoEnvironmentError(f"The {self._name} target has no environment set.")
+        return self._env
 
     @typing.final
     def wait(self, timeout: float) -> bool:
@@ -73,7 +78,7 @@ class Target:
         return False
 
     @functools.cached_property
-    def last_modified(self) -> typing.Optional[int]:
+    def last_modified(self) -> int | None:
         return None
 
     @functools.cached_property
@@ -110,7 +115,7 @@ class FileTarget(Target):
         return self._fullpath.exists()
 
     @functools.cached_property
-    def last_modified(self) -> typing.Optional[int]:
+    def last_modified(self) -> int | None:
         try:
             st = os.stat(self._fullpath)
         except FileNotFoundError:
@@ -130,11 +135,28 @@ class Environment:
         self._prev = prev
         self._map: dict[str, typing.Any] = {}
         self._targets: dict[str, Target] = {}
+        self._main_target: Target | None = None
 
-    def add_target(self, target: Target) -> None:
+    @property
+    def targets(self) -> dict[str, Target]:
+        return self._targets
+
+    @property
+    def main_target(self) -> Target | None:
+        return self._main_target
+
+    def add_target(self, target: Target, main: bool = False) -> None:
         if target.name in self._targets:
             raise errors.RepeatedTargetError(target.name)
-        target.env = self
+
+        if main:
+            if self._main_target is not None:
+                raise errors.SecondMainTargetError(target.name)
+            self._main_target = target
+
+        if target._env is None:
+            target._env = self
+
         self._targets[target.name] = target
 
     def get(self, key: str, default: typing.Any = None) -> typing.Any:

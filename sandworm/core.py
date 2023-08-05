@@ -8,12 +8,13 @@ logger = logging.getLogger("sandworm.core")
 clean_targets: list[target.Target] = []
 
 
-def init_logging(formatter: logging.Formatter | None = None) -> None:
-    if formatter is None:
-        formatter = logging.Formatter(fmt="[%(levelname)s] %(message)s")
+def init_logging(*, fmt: str = "[%(levelname)s %(message)s]", verbose: bool = False) -> None:
     handler = logging.StreamHandler(stream=sys.stdout)
-    handler.setFormatter(formatter)
-    logging.getLogger().addHandler(handler)
+    handler.setFormatter(logging.Formatter(fmt=fmt))
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    logger.addHandler(handler)
 
 
 def _display_cycle(cycle: list[target.Target]) -> None:

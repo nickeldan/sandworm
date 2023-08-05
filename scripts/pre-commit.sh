@@ -1,5 +1,5 @@
 #!/bin/sh -e
 
-black -q --check sandworm
-mypy sandworm
-flake8 sandworm
+black -q --check .
+mypy .
+flake8 .
