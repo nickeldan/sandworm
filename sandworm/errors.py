@@ -6,9 +6,5 @@ class NoEnvironmentError(SandwormError):
     pass
 
 
-class RepeatedTargetError(SandwormError):
-    pass
-
-
 class SecondMainTargetError(SandwormError):
     pass

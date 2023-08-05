@@ -4,11 +4,10 @@ import sys
 from . import _graph
 from . import target
 
-logger = logging.getLogger("sandworm.core")
-clean_targets: list[target.Target] = []
+_logger = logging.getLogger("sandworm.core")
 
 
-def init_logging(*, fmt: str = "[%(levelname)s %(message)s]", verbose: bool = False) -> None:
+def init_logging(*, fmt: str = "[%(levelname)s] %(message)s", verbose: bool = False) -> None:
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setFormatter(logging.Formatter(fmt=fmt))
 
@@ -18,11 +17,11 @@ def init_logging(*, fmt: str = "[%(levelname)s %(message)s]", verbose: bool = Fa
 
 
 def _display_cycle(cycle: list[target.Target]) -> None:
-    logger.error("Dependency cycle detected:")
+    _logger.error("Dependency cycle detected:")
     base = cycle[0].env.basedir
     for t in cycle:
-        logger.error(f"\t{t.fullname()} from {t.env.basedir.relative_to(base)}")
-    logger.error(f"\t{cycle[0].fullname()} from .")
+        _logger.error(f"\t{t.fullname()} from {t.env.basedir.relative_to(base)}")
+    _logger.error(f"\t{cycle[0].fullname()} from .")
 
 
 def root_build(env: target.Environment, main: target.Target) -> bool:
@@ -31,34 +30,30 @@ def root_build(env: target.Environment, main: target.Target) -> bool:
         return False
 
     if ret := _build_sequence(env, _linearize(main)):
-        logger.info("Build successful")
+        _logger.info("Build successful")
     return ret
 
 
-def add_clean_target(targ: target.Target) -> None:
-    clean_targets.append(targ)
-
-
 def make_clean(env: target.Environment) -> bool:
-    for t in clean_targets:
+    for t in target._clean_targets:
         if (cycle := _graph.Graph(t).find_cycle()) is not None:
             _display_cycle(cycle)
             return False
 
     sequence: list[target.Target] = []
-    for t in reversed(clean_targets):
+    for t in reversed(target._clean_targets):
         sequence += _linearize(t)
     return _build_sequence(env, sequence)
 
 
 def _build_sequence(env: target.Environment, sequence: list[target.Target]) -> bool:
     for targ in sequence:
-        if targ.wait(0.0):
+        if targ.built:
             continue
 
-        logger.debug(f"Building {type(targ).__name__}: {targ.fullname()}")
+        _logger.debug(f"Building {targ.fullname()}")
         if not targ.build():
-            logger.error(f"Build failed for {type(targ).__name__}: {targ.fullname()}")
+            _logger.error(f"Build failed for {targ.fullname()}")
             return False
 
     return True

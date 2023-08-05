@@ -7,7 +7,10 @@ import pathlib
 import sys
 import textwrap
 
-import sandworm
+from . import core
+from . import target
+
+VERSION = "0.1.0"
 
 
 def get_args() -> argparse.Namespace:
@@ -42,40 +45,37 @@ def make_template(dest: pathlib.Path) -> None:
     print("Wormfile.py created.")
 
 
-def create_environment(args: argparse.Namespace) -> sandworm.Environment | None:
-    env = sandworm.Environment(os.getcwd())
+def create_environment(args: argparse.Namespace) -> target.Environment | None:
+    env = target.Environment(os.getcwd())
     if args.command == "build":
         env["SANDWORM_TARGET"] = args.target
         env["SANDWORM_CLEAN"] = False
     else:
         env["SANDWORM_CLEAN"] = True
 
+    sys.path.append(str(pathlib.Path.cwd()))
     if not importlib.import_module("Wormfile").load_targets(env):
         return None
     return env
 
 
-def do_build(env: sandworm.Environment, target_str: str) -> int:
+def do_build(env: target.Environment, target_str: str) -> bool:
     if target_str:
         if (target := env.targets.get(target_str)) is None:
             print(f"No such target: {target_str}", file=sys.stderr)
-            return 1
+            return False
     else:
         if env.main_target is None:
             print("Main target not set.", file=sys.stderr)
-            return 1
+            return False
         target = env.main_target
 
-    return 0 if sandworm.root_build(env, target) else 1
-
-
-def do_clean(env: sandworm.Environment) -> int:
-    return 0 if sandworm.make_clean(env) else 1
+    return core.root_build(env, target)
 
 
 def main(args: argparse.Namespace) -> int:
     if args.version:
-        print(sandworm.VERSION)
+        print(VERSION)
         return 0
 
     wormfile = pathlib.Path.cwd() / "Wormfile.py"
@@ -86,16 +86,16 @@ def main(args: argparse.Namespace) -> int:
         make_template(wormfile)
         return 0
 
-    sandworm.init_logging(verbose=args.verbose)
+    core.init_logging(verbose=args.verbose)
     if (env := create_environment(args)) is None:
         return 1
 
     if args.command == "build":
         ret = do_build(env, args.target)
     else:
-        ret = do_clean(env)
-    return ret
+        ret = core.make_clean(env)
+    return 0 if ret else 1
 
 
-if __name__ == "__main__":
-    sys.exit(main(get_args()))
+def _console_main() -> int:
+    return main(get_args())

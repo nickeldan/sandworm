@@ -2,31 +2,34 @@ from __future__ import annotations
 import collections.abc
 import functools
 import importlib
-import multiprocessing
+import logging
 import os
 import pathlib
 import typing
 
 from . import errors
 
-T = typing.TypeVar("T", bound="Target")
-Builder = typing.Callable[[T], bool]
+_T = typing.TypeVar("_T", bound="Target")
+_Builder = typing.Callable[[_T], bool]
+
+_logger = logging.getLogger("sandworm.target")
+_clean_targets: list[Target] = []
 
 _sentinel = object()
 
 
 class Target:
     def __init__(
-        self: T,
+        self: _T,
         name: str,
-        dependencies: collections.abc.Iterable[Target],
-        builder: Builder[T],
+        dependencies: collections.abc.Iterable[Target] = (),
+        builder: _Builder[_T] | None = None,
     ) -> None:
         self._name = name
         self._dependencies = list(dependencies)
         self._builder = builder
-        self._build_event = multiprocessing.Event()
         self._env: Environment | None = None
+        self._built = False
 
     @typing.final
     def __eq__(self, other: typing.Any) -> bool:
@@ -52,15 +55,22 @@ class Target:
     @property
     def env(self) -> Environment:
         if self._env is None:
-            raise errors.NoEnvironmentError(f"The {self._name} target has no environment set.")
+            raise errors.NoEnvironmentError(f"The {self._name} target has not been added to an environment.")
         return self._env
 
-    @typing.final
-    def wait(self, timeout: float) -> bool:
-        return self._build_event.wait(timeout=timeout)
+    @property
+    def built(self) -> bool:
+        return self._built
 
     @typing.final
-    def build(self: T) -> bool:
+    def build(self: _T) -> bool:
+        if self._builder is None:
+            if self.exists or self.dependencies:
+                return True
+            else:
+                _logger.error(f"No rule to build {self.fullname()}.")
+                return False
+
         different = (pwd := pathlib.Path.cwd()) != self.env.basedir
         if different:
             os.chdir(self.env.basedir)
@@ -70,7 +80,7 @@ class Target:
             if different:
                 os.chdir(pwd)
         if ret:
-            self._build_event.set()
+            self._built = True
         return ret
 
     @functools.cached_property
@@ -103,21 +113,20 @@ class Target:
 
 @typing.final
 class FileTarget(Target):
-    def __init__(self, *args: typing.Any) -> None:
-        super().__init__(*args)
-        self._fullpath = (self.env.basedir / self.name).resolve()
+    def _fullpath(self) -> pathlib.Path:
+        return self.env.basedir / self.name
 
     def fullname(self) -> str:
-        return str(self._fullpath)
+        return str(self._fullpath())
 
     @functools.cached_property
     def exists(self) -> bool:
-        return self._fullpath.exists()
+        return self._fullpath().exists()
 
     @functools.cached_property
     def last_modified(self) -> int | None:
         try:
-            st = os.stat(self._fullpath)
+            st = os.stat(self._fullpath())
         except FileNotFoundError:
             return None
         return int(st.st_mtime)
@@ -145,19 +154,25 @@ class Environment:
     def main_target(self) -> Target | None:
         return self._main_target
 
-    def add_target(self, target: Target, main: bool = False) -> None:
+    def add_target(self, target: Target, *, main: bool = False, clean: bool = False) -> None:
         if target.name in self._targets:
-            raise errors.RepeatedTargetError(target.name)
+            return
 
         if main:
             if self._main_target is not None:
                 raise errors.SecondMainTargetError(target.name)
             self._main_target = target
 
+        if clean:
+            _clean_targets.append(target)
+
         if target._env is None:
             target._env = self
 
         self._targets[target.name] = target
+
+        for dep in target.dependencies:
+            self.add_target(dep)
 
     def get(self, key: str, default: typing.Any = None) -> typing.Any:
         if (value := self._map.get(key, _sentinel)) is not _sentinel:
@@ -182,10 +197,13 @@ class Environment:
     def __setitem__(self, key: str, value: typing.Any) -> None:
         self._map[key] = value
 
+    def set_if_unset(self, key: str, value: typing.Any) -> None:
+        if key not in self:
+            self[key] = value
+
     def load_defaults(self, values: dict[str, typing.Any]) -> None:
         for key, value in values.items():
-            if key not in self:
-                self[key] = value
+            self.set_if_unset(key, value)
 
     def load_subfile(self, directory: str | pathlib.Path) -> Environment:
         if isinstance(directory, str):
