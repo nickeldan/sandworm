@@ -113,6 +113,15 @@ class Target:
 
 @typing.final
 class FileTarget(Target):
+    def __init__(
+        self: _T,
+        name: str | pathlib.Path,
+        **kwargs: typing.Any,
+    ) -> None:
+        if isinstance(name, pathlib.Path):
+            name = str(name)
+        super().__init__(name, **kwargs)
+
     def _fullpath(self) -> pathlib.Path:
         return self.env.basedir / self.name
 
@@ -146,6 +155,9 @@ class Environment:
         self._targets: dict[str, Target] = {}
         self._main_target: Target | None = None
 
+    def __repr__(self) -> str:
+        return f"Environment(basedir={self.basedir}, {self._map})"
+
     @property
     def targets(self) -> dict[str, Target]:
         return self._targets
@@ -160,7 +172,9 @@ class Environment:
 
         if main:
             if self._main_target is not None:
-                raise errors.SecondMainTargetError(target.name)
+                raise errors.SecondMainTargetError(
+                    f"A main target has already been added: {self._main_target.name}"
+                )
             self._main_target = target
 
         if clean:
@@ -205,7 +219,7 @@ class Environment:
         for key, value in values.items():
             self.set_if_unset(key, value)
 
-    def load_subfile(self, directory: str | pathlib.Path) -> Environment:
+    def load_subfile(self, directory: str | pathlib.Path) -> Environment | None:
         if isinstance(directory, str):
             directory = pathlib.Path(directory)
 
@@ -215,7 +229,6 @@ class Environment:
         pwd = os.getcwd()
         os.chdir(directory)
         try:
-            module.load_targets(env)
+            return env if module.load_targets(env) else None
         finally:
             os.chdir(pwd)
-        return env

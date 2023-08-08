@@ -1,5 +1,7 @@
 import logging
+import os
 import sys
+import typing
 
 from . import _graph
 from . import target
@@ -7,9 +9,21 @@ from . import target
 _logger = logging.getLogger("sandworm.core")
 
 
-def init_logging(*, fmt: str = "[%(levelname)s] %(message)s", verbose: bool = False) -> None:
+class _ColorFormatter(logging.Formatter):
+    def __init__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.is_tty = os.isatty(sys.stdout.fileno())
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = super().format(record)
+        if self.is_tty and record.levelno >= logging.ERROR:
+            msg = "\x1b[31m" + msg + "\x1b[0m"
+        return msg
+
+
+def init_logging(*, fmt: str = "%(message)s", verbose: bool = False) -> None:
     handler = logging.StreamHandler(stream=sys.stdout)
-    handler.setFormatter(logging.Formatter(fmt=fmt))
+    handler.setFormatter(_ColorFormatter(fmt=fmt))
 
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG if verbose else logging.INFO)
@@ -28,6 +42,9 @@ def root_build(env: target.Environment, main: target.Target) -> bool:
     if (cycle := _graph.Graph(main).find_cycle()) is not None:
         _display_cycle(cycle)
         return False
+
+    if not main.out_of_date:
+        return True
 
     if ret := _build_sequence(env, _linearize(main)):
         _logger.info("Build successful")
