@@ -7,23 +7,21 @@ import os
 import pathlib
 import typing
 
-from . import errors
-
-T = typing.TypeVar("T", bound="Target")
-Builder = typing.Callable[[T], bool]
+_T = typing.TypeVar("_T", bound="Target")
+Builder = collections.abc.Callable[[_T], bool]
 
 _logger = logging.getLogger("sandworm.target")
-_clean_targets: list[Target] = []
 
 _sentinel = object()
 
 
 class Target:
     def __init__(
-        self: T,
+        self: _T,
         name: str,
+        *,
         dependencies: collections.abc.Iterable[Target] = (),
-        builder: Builder[T] | None = None,
+        builder: Builder[_T] | None = None,
     ) -> None:
         self._name = name
         self.dependencies = list(dependencies)
@@ -49,13 +47,12 @@ class Target:
 
     @property
     @typing.final
-    def builder(self: T) -> Builder[T] | None:
+    def builder(self: _T) -> Builder[_T] | None:
         return self._builder
 
     @property
     def env(self) -> Environment:
-        if self._env is None:
-            raise errors.NoEnvironmentError(f"The {self._name} target has not been added to an environment.")
+        assert self._env is not None
         return self._env
 
     @property
@@ -63,7 +60,7 @@ class Target:
         return self._built
 
     @typing.final
-    def build(self: T) -> bool:
+    def build(self: _T) -> bool:
         _logger.debug(f"Building {self.fullname()}")
 
         if self._builder is None:
@@ -93,11 +90,11 @@ class Target:
 
         return ret
 
-    @functools.cached_property
+    @property
     def exists(self) -> bool:
         return False
 
-    @functools.cached_property
+    @property
     def last_modified(self) -> int | None:
         return None
 
@@ -124,13 +121,15 @@ class Target:
 @typing.final
 class FileTarget(Target):
     def __init__(
-        self: T,
-        name: str | pathlib.Path,
-        **kwargs: typing.Any,
+        self: _T,
+        name: str,
+        *,
+        dependencies: collections.abc.Iterable[Target] = (),
+        builder: Builder[_T] | None = None,
     ) -> None:
         if isinstance(name, pathlib.Path):
             name = str(name)
-        super().__init__(name, **kwargs)
+        super().__init__(name, dependencies=dependencies, builder=builder)
 
     def _fullpath(self) -> pathlib.Path:
         return self.env.basedir / self.name
@@ -163,32 +162,34 @@ class Environment:
         self._prev = prev
         self._map: dict[str, typing.Any] = {}
         self._targets: dict[str, Target] = {}
-        self._main_target: Target | None = None
+        self._clean_targets: list[Target] = []
+
+        self._main_target: Target
+        self.add_target(Target("", builder=lambda x: True), main=True)
 
     def __repr__(self) -> str:
         return f"Environment(basedir={self.basedir}, {self._map})"
 
     @property
-    def targets(self) -> dict[str, Target]:
-        return self._targets
-
-    @property
-    def main_target(self) -> Target | None:
+    def main_target(self) -> Target:
         return self._main_target
 
+    @property
+    def targets(self) -> dict[str, Target]:
+        return {name: targ for name, targ in self._targets.items() if name}
+
+    @property
+    def clean_targets(self) -> list[Target]:
+        return self._clean_targets.copy()
+
     def add_target(self, target: Target, *, main: bool = False, clean: bool = False) -> None:
-        if target.name in self._targets:
-            return
-
         if main:
-            if self._main_target is not None:
-                raise errors.SecondMainTargetError(
-                    f"A main target has already been added: {self._main_target.name}"
-                )
             self._main_target = target
-
-        if clean:
-            _clean_targets.append(target)
+        elif clean:
+            env: Environment | None = self
+            while env is not None:
+                env._clean_targets.append(target)
+                env = env._prev
 
         if target._env is None:
             target._env = self

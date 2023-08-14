@@ -55,7 +55,7 @@ def make_template(dest: pathlib.Path) -> None:
 
             def load_targets(env: sandworm.Environment) -> bool:
                 return True
-            """))
+            """).strip())
     print("Wormfile.py created.")
 
 
@@ -107,7 +107,9 @@ def do_build(env: target.Environment, target_str: str, max_workers: int | None) 
         return core.root_build(target)
 
 
-def main(args: argparse.Namespace, extra_args: list[str]) -> int:
+def main() -> int:
+    args, extra_args = get_args()
+
     if args.version:
         print(VERSION)
         return 0
@@ -130,7 +132,3 @@ def main(args: argparse.Namespace, extra_args: list[str]) -> int:
         ret = core.make_clean(env)
 
     return 0 if ret else 1
-
-
-def _console_main() -> int:
-    return main(*get_args())
