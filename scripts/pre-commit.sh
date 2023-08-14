@@ -3,3 +3,4 @@
 black -q --check .
 mypy .
 flake8 .
+pytest

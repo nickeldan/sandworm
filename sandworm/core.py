@@ -25,7 +25,7 @@ def init_logging(*, fmt: str = "%(message)s", verbose: bool = False) -> None:
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setFormatter(_ColorFormatter(fmt=fmt))
 
-    logger = logging.getLogger()
+    logger = logging.getLogger("sandworm")
     logger.setLevel(logging.DEBUG if verbose else logging.INFO)
     logger.addHandler(handler)
 
@@ -52,13 +52,13 @@ def root_build(main: target.Target) -> bool:
 
 
 def make_clean(env: target.Environment) -> bool:
-    for t in target._clean_targets:
+    for t in env.clean_targets:
         if (cycle := _graph.Graph(t).find_cycle()) is not None:
             _display_cycle(cycle)
             return False
 
     sequence: list[target.Target] = []
-    for t in reversed(target._clean_targets):
+    for t in reversed(env.clean_targets):
         sequence += _linearize(t)
     return _build_sequence(sequence)
 
