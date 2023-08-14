@@ -9,8 +9,8 @@ import typing
 
 from . import errors
 
-_T = typing.TypeVar("_T", bound="Target")
-_Builder = typing.Callable[[_T], bool]
+T = typing.TypeVar("T", bound="Target")
+Builder = typing.Callable[[T], bool]
 
 _logger = logging.getLogger("sandworm.target")
 _clean_targets: list[Target] = []
@@ -20,13 +20,13 @@ _sentinel = object()
 
 class Target:
     def __init__(
-        self: _T,
+        self: T,
         name: str,
         dependencies: collections.abc.Iterable[Target] = (),
-        builder: _Builder[_T] | None = None,
+        builder: Builder[T] | None = None,
     ) -> None:
         self._name = name
-        self._dependencies = list(dependencies)
+        self.dependencies = list(dependencies)
         self._builder = builder
         self._env: Environment | None = None
         self._built = False
@@ -49,8 +49,8 @@ class Target:
 
     @property
     @typing.final
-    def dependencies(self) -> list[Target]:
-        return self._dependencies
+    def builder(self: T) -> Builder[T] | None:
+        return self._builder
 
     @property
     def env(self) -> Environment:
@@ -63,7 +63,9 @@ class Target:
         return self._built
 
     @typing.final
-    def build(self: _T) -> bool:
+    def build(self: T) -> bool:
+        _logger.debug(f"Building {self.fullname()}")
+
         if self._builder is None:
             if self.exists or self.dependencies:
                 return True
@@ -76,11 +78,19 @@ class Target:
             os.chdir(self.env.basedir)
         try:
             ret = self._builder(self)
+        except Exception:
+            _logger.exception(f"Exception caught while building {self.fullname()}")
+            ret = False
         finally:
             if different:
                 os.chdir(pwd)
+
         if ret:
+            _logger.debug(f"Build for {self.fullname()} succeeded")
             self._built = True
+        else:
+            _logger.error(f"Build for {self.fullname()} suceeded")
+
         return ret
 
     @functools.cached_property
@@ -114,7 +124,7 @@ class Target:
 @typing.final
 class FileTarget(Target):
     def __init__(
-        self: _T,
+        self: T,
         name: str | pathlib.Path,
         **kwargs: typing.Any,
     ) -> None:
