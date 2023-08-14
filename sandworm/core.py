@@ -38,7 +38,7 @@ def _display_cycle(cycle: list[target.Target]) -> None:
     _logger.error(f"\t{cycle[0].fullname()} from .")
 
 
-def root_build(env: target.Environment, main: target.Target) -> bool:
+def root_build(main: target.Target) -> bool:
     if (cycle := _graph.Graph(main).find_cycle()) is not None:
         _display_cycle(cycle)
         return False
@@ -46,7 +46,7 @@ def root_build(env: target.Environment, main: target.Target) -> bool:
     if not main.out_of_date:
         return True
 
-    if ret := _build_sequence(env, _linearize(main)):
+    if ret := _build_sequence(_linearize(main)):
         _logger.info("Build successful")
     return ret
 
@@ -60,17 +60,15 @@ def make_clean(env: target.Environment) -> bool:
     sequence: list[target.Target] = []
     for t in reversed(target._clean_targets):
         sequence += _linearize(t)
-    return _build_sequence(env, sequence)
+    return _build_sequence(sequence)
 
 
-def _build_sequence(env: target.Environment, sequence: list[target.Target]) -> bool:
+def _build_sequence(sequence: list[target.Target]) -> bool:
     for targ in sequence:
         if targ.built:
             continue
 
-        _logger.debug(f"Building {targ.fullname()}")
         if not targ.build():
-            _logger.error(f"Build failed for {targ.fullname()}")
             return False
 
     return True
