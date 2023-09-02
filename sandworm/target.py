@@ -5,6 +5,7 @@ import importlib
 import logging
 import os
 import pathlib
+import pickle
 import typing
 
 _T = typing.TypeVar("_T", bound="Target")
@@ -13,6 +14,10 @@ Builder = collections.abc.Callable[[_T], bool]
 _logger = logging.getLogger("sandworm.target")
 
 _sentinel = object()
+
+
+def _dummy_builder(targ: _T) -> bool:
+    return True
 
 
 class Target:
@@ -28,6 +33,12 @@ class Target:
         self._builder = builder
         self._env: Environment | None = None
         self._built = False
+
+        if builder is not None:
+            try:
+                pickle.dumps(builder)
+            except Exception as e:
+                raise TypeError("Builders must be picklable.") from e
 
     @typing.final
     def __eq__(self, other: typing.Any) -> bool:
@@ -86,7 +97,7 @@ class Target:
             _logger.debug(f"Build for {self.fullname()} succeeded")
             self._built = True
         else:
-            _logger.error(f"Build for {self.fullname()} suceeded")
+            _logger.error(f"Build for {self.fullname()} failed")
 
         return ret
 
@@ -165,7 +176,7 @@ class Environment:
         self._clean_targets: list[Target] = []
 
         self._main_target: Target
-        self.add_target(Target("", builder=lambda x: True), main=True)
+        self.add_target(Target("", builder=_dummy_builder), main=True)
 
     def __repr__(self) -> str:
         return f"Environment(basedir={self.basedir}, {self._map})"

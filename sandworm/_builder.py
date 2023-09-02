@@ -8,7 +8,6 @@ import re
 import sys
 import textwrap
 
-from . import parallel
 from . import core
 from . import target
 
@@ -31,7 +30,7 @@ def get_args() -> tuple[argparse.Namespace, list[str]]:
         dest="max_workers",
         type=int,
         nargs="?",
-        default=1,
+        const=-1,
         help="Build in parallel.  Optionally, specify the number of workers to use.",
     )
 
@@ -101,10 +100,7 @@ def do_build(env: target.Environment, target_str: str, max_workers: int | None) 
             return True
         target = env.main_target
 
-    if max_workers is None or max_workers > 1:
-        return parallel.root_parallel_build(target, max_workers)
-    else:
-        return core.root_build(target)
+    return core.root_build(target, max_workers=max_workers)
 
 
 def main() -> int:
@@ -115,19 +111,33 @@ def main() -> int:
         return 0
 
     wormfile = pathlib.Path.cwd() / "Wormfile.py"
-    if not wormfile.is_file():
-        if args.command != "init":
-            print("No Wormfile.py found.", file=sys.stderr)
+
+    if args.command == "init":
+        if wormfile.is_file():
+            print("Wormfile.py already exists.", file=sys.stderr)
             return 1
         make_template(wormfile)
         return 0
+
+    if not wormfile.is_file():
+        print("No Wormfile.py found.", file=sys.stderr)
+        return 1
 
     core.init_logging(fmt=args.format, verbose=args.verbose)
     if (env := create_environment(args, extra_args)) is None:
         return 1
 
+    max_workers: int | None
+    match args.max_workers:
+        case None:
+            max_workers = 1
+        case n if n < 0:
+            max_workers = None
+        case n:
+            max_workers = n
+
     if args.command == "build":
-        ret = do_build(env, args.target, args.max_workers)
+        ret = do_build(env, args.target, max_workers)
     else:
         ret = core.make_clean(env)
 

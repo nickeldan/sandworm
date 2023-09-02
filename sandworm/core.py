@@ -4,6 +4,7 @@ import sys
 import typing
 
 from . import _graph
+from . import _parallel
 from . import target
 
 _logger = logging.getLogger("sandworm.core")
@@ -21,8 +22,10 @@ class _ColorFormatter(logging.Formatter):
         return msg
 
 
-def init_logging(*, fmt: str = "%(message)s", verbose: bool = False) -> None:
-    handler = logging.StreamHandler(stream=sys.stdout)
+def init_logging(
+    *, fmt: str = "%(message)s", verbose: bool = False, stream: typing.TextIO = sys.stdout
+) -> None:
+    handler = logging.StreamHandler(stream=stream)
     handler.setFormatter(_ColorFormatter(fmt=fmt))
 
     logger = logging.getLogger("sandworm")
@@ -38,7 +41,7 @@ def _display_cycle(cycle: list[target.Target]) -> None:
     _logger.error(f"\t{cycle[0].fullname()} from .")
 
 
-def root_build(main: target.Target) -> bool:
+def root_build(main: target.Target, max_workers: int | None = 1) -> bool:
     if (cycle := _graph.Graph(main).find_cycle()) is not None:
         _display_cycle(cycle)
         return False
@@ -46,7 +49,12 @@ def root_build(main: target.Target) -> bool:
     if not main.out_of_date:
         return True
 
-    if ret := _build_sequence(_linearize(main)):
+    if max_workers == 1:
+        ret = _build_sequence(_linearize(main))
+    else:
+        ret = _parallel.parallel_root_build(main, max_workers)
+
+    if ret:
         _logger.info("Build successful")
     return ret
 
