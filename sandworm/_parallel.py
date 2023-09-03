@@ -1,81 +1,86 @@
 from __future__ import annotations
+import collections.abc
 import concurrent.futures
 import dataclasses
+import itertools
 import logging
 import logging.handlers
 import multiprocessing
-import multiprocessing.connection
 import multiprocessing.queues
 import threading
 import typing
 
 from . import target
 
-Connection = multiprocessing.connection.Connection
-ChildWaiter = Connection | set[Connection] | None
-JobPreContext = tuple[ChildWaiter, Connection | None, Connection | None]
+JobDeps = int | set[int] | None
 
 logger = logging.getLogger("sandworm.parallel")
+
+# Populated by init_job.
+job_queue: multiprocessing.queues.Queue
+
+
+@dataclasses.dataclass(slots=True, repr=False, eq=False)
+class JobPreContext:
+    token: int | None
+    deps: JobDeps
 
 
 @dataclasses.dataclass(slots=True, repr=False, eq=False)
 class Job:
     targ: target.Target
-    waiter: ChildWaiter
-    read_end: Connection
-    write_end: Connection
+    token: int
+    deps: JobDeps
 
 
 @dataclasses.dataclass(slots=True, repr=False, eq=False)
-class ReducedJob:
-    targ: target.Target
-    read_end: Connection
-    write_end: Connection
-
-    @staticmethod
-    def from_job(job: Job) -> ReducedJob:
-        return ReducedJob(targ=job.targ, read_end=job.read_end, write_end=job.write_end)
+class JobResult:
+    token: int
+    success: bool
 
 
-def init_job_process(log_queue: multiprocessing.queues.Queue) -> None:
+def init_job(j_queue: multiprocessing.queues.Queue, log_queue: multiprocessing.queues.Queue) -> None:
+    global job_queue
+    job_queue = j_queue
+
     logging.getLogger().handlers = [logging.handlers.QueueHandler(log_queue)]
 
 
-def send_job_status(
-    fileno_connection: Connection, job: Job | ReducedJob, status: bool, *, fileno: int | None = None
-) -> None:
-    if fileno is None:
-        fileno = job.read_end.fileno()
-    job.write_end.send(status)
-    job.write_end.close()
-    fileno_connection.send(fileno)
+def send_job_result(q: multiprocessing.queues.Queue, job: Job, success: bool) -> None:
+    q.put(JobResult(token=job.token, success=success))
 
 
-def run_job(fileno_connection: Connection, job: ReducedJob, fileno: int) -> None:
+def run_job(job: Job) -> None:
     try:
-        ret = job.targ.build()
+        success = job.targ.build()
     except Exception:
-        logger.exception(f"Job for {job.targ.fullname()} crashed:")
-        ret = False
-    send_job_status(fileno_connection, job, ret, fileno=fileno)
+        success = False
+        raise
+    finally:
+        send_job_result(job_queue, job, success)
 
 
 class JobPool(concurrent.futures.ProcessPoolExecutor):
     def __init__(self, max_workers: int | None, jobs: list[Job]) -> None:
+        self._job_queue: multiprocessing.queues.Queue = multiprocessing.Queue()
         self._log_queue: multiprocessing.queues.Queue = multiprocessing.Queue()
-        super().__init__(max_workers=max_workers, initializer=init_job_process, initargs=(self._log_queue,))
-        self._fileno_conn_read, self._fileno_conn_write = multiprocessing.Pipe()
+        super().__init__(
+            max_workers=max_workers,
+            initializer=init_job,
+            initargs=(
+                self._job_queue,
+                self._log_queue,
+            ),
+        )
         self._jobs = jobs
-        self._pending_connections: dict[int, Connection] = {}
+        self._pending_jobs: dict[int, Job] = {}
+        self._running_futures: dict[int, concurrent.futures.Future] = {}
         self._any_failures = False
 
         for job in jobs:
-            self._add_pending_connection(job)
+            self._pending_jobs[job.token] = job
 
         self._log_thread = threading.Thread(target=self._thread_func)
-
-    def _add_pending_connection(self, job: Job) -> None:
-        self._pending_connections[job.read_end.fileno()] = job.read_end
 
     def _thread_func(self) -> None:
         while (record := self._log_queue.get()) is not None:
@@ -84,37 +89,31 @@ class JobPool(concurrent.futures.ProcessPoolExecutor):
 
     def _handle_job(self, job: Job) -> None:
         if job.targ.builder is None:
-            send_job_status(self._fileno_conn_write, job, job.targ.exists)
+            send_job_result(self._job_queue, job, job.targ.exists)
         else:
-            fileno = job.read_end.fileno()
             logger.debug(f"Starting job for target {job.targ.fullname()}")
-            self.submit(run_job, self._fileno_conn_write, ReducedJob.from_job(job), fileno)
+            self._running_futures[job.token] = self.submit(run_job, job)
 
     def _handle_job_status(self, job: Job, dep_success: bool) -> None:
         if dep_success:
             self._handle_job(job)
         else:
-            send_job_status(self._fileno_conn_write, job, False)
+            send_job_result(self._job_queue, job, False)
 
-    def _handle_ready_connection(self, conn: Connection) -> None:
-        success: bool = conn.recv()
-        if not success:
+    def _handle_finished_job(self, result: JobResult) -> None:
+        if not result.success:
             self._any_failures = True
-        conn.close()
         indices_to_remove: set[int] = set()
         for k, job in enumerate(self._jobs):
-            assert job.waiter is not None
-            job_finished = False
-            if isinstance(job.waiter, Connection):
-                if job.waiter is conn:
-                    job_finished = True
-            elif conn in job.waiter:
-                job.waiter.remove(conn)
-                if not job.waiter:
-                    job_finished = True
+            assert job.deps is not None
+            if isinstance(job.deps, int):
+                job_finished = job.deps == result.token
+            elif result.token in job.deps:
+                job.deps.remove(result.token)
+                job_finished = not bool(job.deps)
 
             if job_finished:
-                self._handle_job_status(job, success)
+                self._handle_job_status(job, result.success)
                 indices_to_remove.add(k)
 
         if indices_to_remove:
@@ -124,13 +123,20 @@ class JobPool(concurrent.futures.ProcessPoolExecutor):
         logger.debug("Starting job pool")
 
         for leaf in leaves:
-            self._add_pending_connection(leaf)
+            self._pending_jobs[leaf.token] = leaf
             self._handle_job(leaf)
 
-        while self._pending_connections:
-            fileno: int = self._fileno_conn_read.recv()
-            if (conn := self._pending_connections.pop(fileno, None)) is not None:
-                self._handle_ready_connection(conn)
+        while self._pending_jobs:
+            result: JobResult = self._job_queue.get()
+            job = self._pending_jobs.pop(result.token)
+
+            if (future := self._running_futures.pop(result.token, None)) is not None:
+                try:
+                    future.result()
+                except Exception:
+                    logger.exception(f"Job for target {job.targ.fullname()} crashed:")
+
+            self._handle_finished_job(result)
 
         logger.debug("Job pool finished")
 
@@ -151,39 +157,39 @@ class JobPool(concurrent.futures.ProcessPoolExecutor):
 
 
 def populate_job_pre_map(
-    job_pre_map: dict[target.Target, JobPreContext], targ: target.Target
+    job_pre_map: dict[target.Target, JobPreContext],
+    counter: collections.abc.Iterator[int],
+    targ: target.Target,
 ) -> JobPreContext:
     if (ctx := job_pre_map.get(targ)) is not None:
         return ctx
 
-    child_waiter_set: set[Connection] = set()
+    token_set: set[int] = set()
     for dep in targ.dependencies:
-        dep_ctx = populate_job_pre_map(job_pre_map, dep)
-        if (second_slot := dep_ctx[1]) is None:
-            if isinstance(first_slot := dep_ctx[0], Connection):
-                child_waiter_set.add(first_slot)
-            elif first_slot is not None:
-                child_waiter_set |= first_slot
+        dep_ctx = populate_job_pre_map(job_pre_map, counter, dep)
+        if dep_ctx.token is None:
+            if isinstance(dep_ctx.deps, int):
+                token_set.add(dep_ctx.deps)
+            elif dep_ctx.deps is not None:
+                token_set |= dep_ctx.deps
         else:
-            child_waiter_set.add(second_slot)
+            token_set.add(dep_ctx.token)
 
-    child_waiter: ChildWaiter
-    match len(child_waiter_set):
+    job_deps: JobDeps
+    match len(token_set):
         case 0:
-            child_waiter = None
+            job_deps = None
         case 1:
-            child_waiter = next(iter(child_waiter_set))
+            job_deps = next(iter(token_set))
         case _:
-            child_waiter = child_waiter_set
+            job_deps = token_set
 
-    read_end: Connection | None
-    write_end: Connection | None
+    token: int | None
     if targ.builder is None and targ.dependencies:
-        read_end = write_end = None
+        token = None
     else:
-        read_end, write_end = multiprocessing.Pipe()
-
-    ctx = (child_waiter, read_end, write_end)
+        token = next(counter)
+    ctx = JobPreContext(token=token, deps=job_deps)
     job_pre_map[targ] = ctx
     return ctx
 
@@ -192,16 +198,15 @@ def parallel_root_build(main: target.Target, max_workers: int | None) -> bool:
     logger.debug("Determining target dependencies")
 
     job_pre_map: dict[target.Target, JobPreContext] = {}
-    populate_job_pre_map(job_pre_map, main)
+    populate_job_pre_map(job_pre_map, itertools.count(), main)
 
     jobs: list[Job] = []
     leaves: list[Job] = []
-    for targ, (waiter, read_end, write_end) in job_pre_map.items():
-        if write_end is None:
+    for targ, ctx in job_pre_map.items():
+        if ctx.token is None:
             continue
-        assert read_end is not None
-        job = Job(targ=targ, waiter=waiter, read_end=read_end, write_end=write_end)
-        if waiter is None:
+        job = Job(targ=targ, token=ctx.token, deps=ctx.deps)
+        if job.deps is None:
             leaves.append(job)
         else:
             jobs.append(job)
