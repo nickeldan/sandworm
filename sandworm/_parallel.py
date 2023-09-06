@@ -134,7 +134,7 @@ class JobPool(concurrent.futures.ProcessPoolExecutor):
                 try:
                     future.result()
                 except Exception:
-                    logger.exception(f"Job for target {job.targ.fullname()} crashed:")
+                    logger.exception(f"Exception caught building {job.targ.fullname()}:")
 
             self._handle_finished_job(result)
 
@@ -166,6 +166,9 @@ def populate_job_pre_map(
 
     token_set: set[int] = set()
     for dep in targ.dependencies:
+        if not dep.out_of_date:
+            continue
+
         dep_ctx = populate_job_pre_map(job_pre_map, counter, dep)
         if dep_ctx.token is None:
             if isinstance(dep_ctx.deps, int):

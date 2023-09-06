@@ -1,6 +1,7 @@
 __pycache__
 .mypy_cache
 .pytest_cache
-.vscode
-.python-version
-*.egg-info
+/.vscode
+/.python-version
+/sandworm.egg-info
+/build
