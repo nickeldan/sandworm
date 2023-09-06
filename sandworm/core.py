@@ -7,6 +7,8 @@ from . import _graph
 from . import _parallel
 from . import target
 
+VERSION = "0.1.0"
+
 _logger = logging.getLogger("sandworm.core")
 
 
@@ -23,7 +25,7 @@ class _ColorFormatter(logging.Formatter):
 
 
 def init_logging(
-    *, fmt: str = "%(message)s", verbose: bool = False, stream: typing.TextIO = sys.stdout
+    *, fmt: str = "%(message)s", verbose: bool = False, stream: typing.TextIO = sys.stderr
 ) -> None:
     handler = logging.StreamHandler(stream=stream)
     handler.setFormatter(_ColorFormatter(fmt=fmt))
@@ -35,10 +37,8 @@ def init_logging(
 
 def _display_cycle(cycle: list[target.Target]) -> None:
     _logger.error("Dependency cycle detected:")
-    base = cycle[0].env.basedir
-    for t in cycle:
-        _logger.error(f"\t{t.fullname()} from {t.env.basedir.relative_to(base)}")
-    _logger.error(f"\t{cycle[0].fullname()} from .")
+    for targ in cycle:
+        _logger.error(f"\t{targ.fullname()}")
 
 
 def root_build(main: target.Target, max_workers: int | None = 1) -> bool:
@@ -76,7 +76,11 @@ def _build_sequence(sequence: list[target.Target]) -> bool:
         if targ.built:
             continue
 
-        if not targ.build():
+        try:
+            if not targ.build():
+                return False
+        except Exception:
+            _logger.exception(f"Exception caught building {targ.fullname():}")
             return False
 
     return True

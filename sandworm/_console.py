@@ -11,8 +11,6 @@ import textwrap
 from . import core
 from . import target
 
-VERSION = "0.1.0"
-
 
 def get_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser()
@@ -87,10 +85,6 @@ def create_environment(args: argparse.Namespace, extra_args: list[str]) -> targe
 
 
 def do_build(env: target.Environment, target_str: str, max_workers: int | None) -> bool:
-    if max_workers is not None and max_workers < 1:
-        print("The number of workers must be either unspecified or at least 1.", file=sys.stderr)
-        return False
-
     if target_str:
         if (target := env.targets.get(target_str)) is None:
             print(f"No such target: {target_str}", file=sys.stderr)
@@ -107,7 +101,7 @@ def main() -> int:
     args, extra_args = get_args()
 
     if args.version:
-        print(VERSION)
+        print(core.VERSION)
         return 0
 
     wormfile = pathlib.Path.cwd() / "Wormfile.py"

@@ -48,6 +48,9 @@ class Target:
     def __hash__(self) -> int:
         return hash((type(self), self.fullname()))
 
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self._name})"
+
     @property
     @typing.final
     def name(self) -> str:
@@ -75,7 +78,7 @@ class Target:
         _logger.debug(f"Building {self.fullname()}")
 
         if self._builder is None:
-            if self.exists or self.dependencies:
+            if self.exists or (type(self) is Target and self.dependencies):
                 return True
             else:
                 _logger.error(f"No rule to build {self.fullname()}.")
@@ -83,15 +86,12 @@ class Target:
 
         different = (pwd := pathlib.Path.cwd()) != self.env.basedir
         if different:
+            _logger.debug(f"Switching directories to {self.env.basedir}")
             os.chdir(self.env.basedir)
-        try:
-            ret = self._builder(self)
-        except Exception:
-            _logger.exception(f"Exception caught while building {self.fullname()}")
-            ret = False
-        finally:
-            if different:
-                os.chdir(pwd)
+        ret = self._builder(self)
+        if different:
+            _logger.debug(f"Switching directories to {pwd}")
+            os.chdir(pwd)
 
         if ret:
             _logger.debug(f"Build for {self.fullname()} succeeded")
@@ -135,15 +135,19 @@ class FileTarget(Target):
         self: _T,
         name: str,
         *,
+        path: pathlib.Path | str | None = None,
         dependencies: collections.abc.Iterable[Target] = (),
         builder: Builder[_T] | None = None,
     ) -> None:
-        if isinstance(name, pathlib.Path):
-            name = str(name)
+        if path is None:
+            path = pathlib.Path(name)
+        elif isinstance(path, str):
+            path = pathlib.Path(path)
+        self.path = path
         super().__init__(name, dependencies=dependencies, builder=builder)
 
     def _fullpath(self) -> pathlib.Path:
-        return self.env.basedir / self.name
+        return self.env.basedir / self.path
 
     def fullname(self) -> str:
         return str(self._fullpath())
@@ -154,10 +158,9 @@ class FileTarget(Target):
 
     @functools.cached_property
     def last_modified(self) -> int | None:
-        try:
-            st = os.stat(self._fullpath())
-        except FileNotFoundError:
+        if not self.exists:
             return None
+        st = os.stat(self._fullpath())
         return int(st.st_mtime)
 
 

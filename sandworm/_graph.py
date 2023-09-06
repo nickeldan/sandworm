@@ -25,7 +25,7 @@ class Graph:
         for dep in top.dependencies:
             match self.visited[dep]:
                 case VisitState.IN_STACK:
-                    return self.stack[self.stack.index(dep) :]
+                    return self.stack[self.stack.index(dep) :] + [dep]
                 case VisitState.NOT_VISITED:
                     self.stack.append(dep)
                     if (cycle := self.find_cycle()) is not None:
